@@ -1,10 +1,10 @@
-use egui::Ui;
-use egui::DragValue;
-use std::f64::consts::PI;
 use egui::Color32;
-use egui::Stroke;
+use egui::DragValue;
 use egui::Sense;
+use egui::Stroke;
+use egui::Ui;
 use egui::Vec2;
+use std::f64::consts::PI;
 
 use glam::DVec2;
 
@@ -40,7 +40,7 @@ impl Ray {
     fn offset(&self, t: f64) -> DVec2 {
         self.o + self.d * t
     }
-    
+
     fn normalize(&self) -> Ray {
         Ray {
             o: self.o,
@@ -51,21 +51,21 @@ impl Ray {
 
 fn ray_circle_intersection(ray: &Ray, circle: &Circle) -> Option<f64> {
     let oc = ray.o - circle.pos;
-    
+
     let a = ray.d.dot(ray.d);
     let b = 2.0 * oc.dot(ray.d);
     let c = oc.dot(oc) - circle.r * circle.r;
-    
+
     let discriminant = b * b - 4.0 * a * c;
-    
+
     if discriminant < 0.0 {
         return None;
     }
-    
+
     let sqrt_discriminant = discriminant.sqrt();
     let t1 = (-b - sqrt_discriminant) / (2.0 * a);
     let t2 = (-b + sqrt_discriminant) / (2.0 * a);
-    
+
     if t1 >= 0.0 && t2 >= 0.0 {
         Some(t1.min(t2))
     } else if t1 >= 0.0 {
@@ -80,26 +80,26 @@ fn ray_circle_intersection(ray: &Ray, circle: &Circle) -> Option<f64> {
 fn teleport_position(pos: DVec2, from: &Circle, to: &Circle) -> DVec2 {
     let x_local = pos.x - from.pos.x;
     let y_local = pos.y - from.pos.y;
-    
+
     let cos_r1 = (-from.rot).cos();
     let sin_r1 = (-from.rot).sin();
     let x_rot = x_local * cos_r1 - y_local * sin_r1;
     let y_rot = x_local * sin_r1 + y_local * cos_r1;
-    
+
     let x_local_final = x_rot / from.r;
     let y_local_final = y_rot / from.r;
-    
+
     let x_scaled = x_local_final * to.r;
     let y_scaled = y_local_final * to.r;
-    
+
     let cos_r2 = to.rot.cos();
     let sin_r2 = to.rot.sin();
     let x_rot2 = x_scaled * cos_r2 - y_scaled * sin_r2;
     let y_rot2 = x_scaled * sin_r2 + y_scaled * cos_r2;
-    
+
     let x_final = x_rot2 + to.pos.x;
     let y_final = y_rot2 + to.pos.y;
-    
+
     DVec2::new(x_final, y_final)
 }
 
@@ -108,43 +108,43 @@ fn teleport_direction(dir: DVec2, from: &Circle, to: &Circle) -> DVec2 {
     let sin_r1 = (-from.rot).sin();
     let x_rot = dir.x * cos_r1 - dir.y * sin_r1;
     let y_rot = dir.x * sin_r1 + dir.y * cos_r1;
-    
+
     let x_local = x_rot / from.r;
     let y_local = y_rot / from.r;
-    
+
     let x_scaled = x_local * to.r;
     let y_scaled = y_local * to.r;
-    
+
     let cos_r2 = to.rot.cos();
     let sin_r2 = to.rot.sin();
     let x_final = x_scaled * cos_r2 - y_scaled * sin_r2;
     let y_final = x_scaled * sin_r2 + y_scaled * cos_r2;
-    
+
     DVec2::new(x_final, y_final)
 }
 
 fn circle_invert_ray_direction(ray: &Ray, circle: &Circle) -> DVec2 {
     let p = ray.o - circle.pos;
     let d = ray.d;
-    
+
     let r2 = p.dot(p);
     if r2 == 0.0 {
         return d;
     }
-    
+
     let dot = p.dot(d);
-    
+
     let num = d * r2 - p * (2.0 * dot);
     let denom = r2 * r2;
-    
+
     let inv = num * (circle.r * circle.r) / denom;
-    
+
     let orig_len = d.length();
     let inv_len = inv.length();
     if inv_len == 0.0 {
         return DVec2::ZERO;
     }
-    
+
     let scale = orig_len / inv_len;
     inv * scale
 }
@@ -152,66 +152,96 @@ fn circle_invert_ray_direction(ray: &Ray, circle: &Circle) -> DVec2 {
 fn intersect_circle_portal(ray: &Ray, portal: &Portal) -> (Option<f64>, bool, Option<Ray>) {
     let t1 = ray_circle_intersection(ray, &portal.c1);
     let t2 = ray_circle_intersection(ray, &portal.c2);
-    
+
     if let Some(t1_val) = t1 {
         if t2.is_none() || t1_val < t2.unwrap() {
             let new_pos = teleport_position(ray.offset(t1_val), &portal.c1, &portal.c2);
             let mut new_dir = teleport_direction(ray.d, &portal.c1, &portal.c2);
-            
+
             match portal.portal_type {
                 PortalType::Wormhole => {
-                    new_dir = circle_invert_ray_direction(&Ray { o: new_pos, d: new_dir }, &portal.c2);
+                    new_dir = circle_invert_ray_direction(
+                        &Ray {
+                            o: new_pos,
+                            d: new_dir,
+                        },
+                        &portal.c2,
+                    );
                 }
                 PortalType::Perspective => {
                     new_dir = -new_dir;
                 }
                 PortalType::Regular => {}
             }
-            
-            return (Some(t1_val), true, Some(Ray { o: new_pos, d: new_dir }));
+
+            return (
+                Some(t1_val),
+                true,
+                Some(Ray {
+                    o: new_pos,
+                    d: new_dir,
+                }),
+            );
         }
     }
-    
+
     if let Some(t2_val) = t2 {
         if t1.is_none() || t2_val < t1.unwrap() {
             let new_pos = teleport_position(ray.offset(t2_val), &portal.c2, &portal.c1);
             let mut new_dir = teleport_direction(ray.d, &portal.c2, &portal.c1);
-            
+
             match portal.portal_type {
                 PortalType::Wormhole => {
-                    new_dir = circle_invert_ray_direction(&Ray { o: new_pos, d: new_dir }, &portal.c1);
+                    new_dir = circle_invert_ray_direction(
+                        &Ray {
+                            o: new_pos,
+                            d: new_dir,
+                        },
+                        &portal.c1,
+                    );
                 }
                 PortalType::Perspective => {
                     new_dir = -new_dir;
                 }
                 PortalType::Regular => {}
             }
-            
-            return (Some(t2_val), true, Some(Ray { o: new_pos, d: new_dir }));
+
+            return (
+                Some(t2_val),
+                true,
+                Some(Ray {
+                    o: new_pos,
+                    d: new_dir,
+                }),
+            );
         }
     }
-    
+
     (None, false, None)
 }
 
-fn travel_ray(ray: &Ray, portal: &Portal, settings: &RenderingSettings) -> Vec<(DVec2, DVec2, f64)> {
+fn travel_ray(
+    ray: &Ray,
+    portal: &Portal,
+    settings: &RenderingSettings,
+) -> Vec<(DVec2, DVec2, f64)> {
     let mut ray = ray.normalize();
     let mut positions = std::collections::VecDeque::new();
     positions.push_back(ray.o);
     let mut lengths = Vec::new();
-    
+
     for _ in 0..settings.max_teleportations {
         let (t, is_continue, new_ray) = intersect_circle_portal(&ray, portal);
-        
+
         if let Some(t_val) = t {
             ray.o = ray.offset(t_val);
             positions.push_back(ray.o);
             lengths.push(ray.d.length());
-            
+
             if let Some(mut teleported_ray) = new_ray {
                 teleported_ray.o = teleported_ray.offset(settings.ray_offset);
                 ray = teleported_ray;
-                
+
                 if is_continue {
                     positions.push_back(ray.o);
                 } else {
@@ -225,7 +255,7 @@ fn travel_ray(ray: &Ray, portal: &Portal, settings: &RenderingSettings) -> Vec<(
             break;
         }
     }
-    
+
     let mut result = vec![];
     for len in lengths {
         let start = positions.pop_front().unwrap();
@@ -239,30 +269,36 @@ fn segment_perpendicular_points(segment: &SegmentLight) -> Vec<Ray> {
     if segment.count == 0 {
         return Vec::new();
     }
-    
+
     let segment_vector = segment.end - segment.start;
     let mut perp_direction = DVec2::new(-segment_vector.y, segment_vector.x);
-    
+
     let perp_length = perp_direction.length();
     if perp_length > 0.0 {
         perp_direction /= perp_length;
     } else {
         perp_direction = DVec2::new(0.0, 1.0);
     }
-    
+
     let mut result = Vec::new();
-    
+
     if segment.count == 1 {
         let origin = (segment.start + segment.end) / 2.0;
-        result.push(Ray { o: origin, d: perp_direction });
+        result.push(Ray {
+            o: origin,
+            d: perp_direction,
+        });
     } else {
         for i in 0..segment.count {
             let t = i as f64 / (segment.count - 1) as f64;
             let origin = segment.start + t * segment_vector;
-            result.push(Ray { o: origin, d: perp_direction });
+            result.push(Ray {
+                o: origin,
+                d: perp_direction,
+            });
         }
     }
-    
+
     result
 }
 
@@ -270,34 +306,29 @@ fn position_angular_rays(cone: &ConeLight) -> Vec<Ray> {
     if cone.count == 0 {
         return Vec::new();
     }
-    
+
     let mut result = Vec::new();
-    
+
     if cone.count == 1 {
         let direction = DVec2::new(cone.orientation.cos(), cone.orientation.sin());
-        result.push(Ray { o: cone.position, d: direction });
+        result.push(Ray {
+            o: cone.position,
+            d: direction,
+        });
     } else {
         for i in 0..cone.count {
             let base_angle = i as f64 * cone.spread / (cone.count - 1) as f64;
             let final_angle = cone.orientation - cone.spread / 2. + base_angle;
             let direction = DVec2::new(final_angle.cos(), final_angle.sin());
-            result.push(Ray { o: cone.position, d: direction });
+            result.push(Ray {
+                o: cone.position,
+                d: direction,
+            });
         }
     }
-    
+
     result
 }
-
-
-
-
-
-
-
-
-
-
-
 
 #[derive(serde::Deserialize, serde::Serialize, Default)]
 pub struct SegmentLight {
@@ -332,11 +363,17 @@ impl Default for RenderingSettings {
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
+#[serde(default)]
 struct DrawingSettings {
     line_thickness: f64,
     portal_thickness: f64,
-    draw_after_position: bool, 
+    draw_after_position: bool,
     light_position: f64,
+    light_radius: f64,
+
+    trace_size: f64,
+    trace_count: usize,
+    draw_trace: bool,
 }
 
 impl Default for DrawingSettings {
@@ -346,6 +383,11 @@ impl Default for DrawingSettings {
             portal_thickness: 1.,
             draw_after_position: true,
             light_position: 0.,
+            light_radius: 2.0,
+
+            trace_size: 100.,
+            trace_count: 10,
+            draw_trace: true,
         }
     }
 }
@@ -417,7 +459,13 @@ pub fn point_ui(ui: &mut egui::Ui, pos: &mut DVec2, coef_x: f64, coef_y: f64) ->
     response
 }
 
-pub fn point_direction_ui(ui: &mut egui::Ui, pos: DVec2, dir: &mut DVec2, coef_x: f64, coef_y: f64) -> egui::Response {
+pub fn point_direction_ui(
+    ui: &mut egui::Ui,
+    pos: DVec2,
+    dir: &mut DVec2,
+    coef_x: f64,
+    coef_y: f64,
+) -> egui::Response {
     let mut pos2 = pos + *dir;
     let res = point_ui(ui, &mut pos2, coef_x, coef_y);
     *dir = pos2 - pos;
@@ -484,11 +532,96 @@ pub fn egui_f64_positive(ui: &mut Ui, value: &mut f64) -> bool {
     })
 }
 
-fn draw_segments(painter: &egui::Painter, segments: &[(DVec2, DVec2, f64)], drawing_settings: &DrawingSettings) {
+fn draw_segments(
+    painter: &egui::Painter,
+    segments: &[(DVec2, DVec2, f64)],
+    drawing_settings: &DrawingSettings,
+) {
+    let mut circle: Option<(DVec2, f64)> = None;
+
     let color = Color32::WHITE.gamma_multiply(0.3);
+    let mut pos = drawing_settings.light_position;
     for (start, end, len) in segments {
-        let stroke = Stroke::new((drawing_settings.line_thickness as f32 * *len as f32).clamp(0.01, 10.0), color);
+        let stroke = Stroke::new(
+            (drawing_settings.line_thickness as f32 * *len as f32).clamp(0.01, 10.0),
+            color,
+        );
+
+        let len1 = (end - start).length();
+        let total_len = len1 / len;
+
+        let t = pos / total_len;
+        if 0. < t && t < 1. {
+            let point = start + (end - start) * t;
+            circle = Some((point, drawing_settings.light_radius * *len));
+            if !drawing_settings.draw_after_position {
+                painter.line_segment([glam_to_egui(*start), glam_to_egui(point)], stroke);
+                break;
+            }
+        }
+        pos -= total_len;
+
         painter.line_segment([glam_to_egui(*start), glam_to_egui(*end)], stroke);
+    }
+
+    let mut segment_iter = segments.iter();
+    if drawing_settings.draw_trace {
+        if let Some(res) = segment_iter.next() {
+            let mut pos_trace = drawing_settings.light_position - drawing_settings.trace_size;
+            let size_trace = drawing_settings.trace_size / drawing_settings.trace_count as f64;
+            let (mut start, mut end, mut len) = *res;
+            let mut len1 = (end - start).length();
+            let mut total_len = len1 / len;
+            'outer: for (_i, opacity) in (0..drawing_settings.trace_count)
+                .map(|i| (i, i as f32 / drawing_settings.trace_count as f32))
+            {
+                let color = Color32::LIGHT_BLUE.gamma_multiply(opacity);
+                let mut stroke = Stroke::new(
+                    (drawing_settings.line_thickness as f32 * len as f32).clamp(0.01, 10.0),
+                    color,
+                );
+
+                let mut t1 = pos_trace / total_len;
+                let mut t2 = (pos_trace + size_trace) / total_len;
+
+                loop {
+                    if t1 <= 1. && t2 > 0. {
+                        let seg_start = start + (end - start) * t1.clamp(0., 1.);
+                        let seg_end = start + (end - start) * t2.clamp(0., 1.);
+                        painter
+                            .line_segment([glam_to_egui(seg_start), glam_to_egui(seg_end)], stroke);
+                    }
+
+                    if t2 > 1. {
+                        pos_trace -= total_len;
+                        (start, end, len) = if let Some(res) = segment_iter.next() {
+                            *res
+                        } else {
+                            break 'outer;
+                        };
+
+                        len1 = (end - start).length();
+                        total_len = len1 / len;
+
+                        t1 = pos_trace / total_len;
+                        t2 = (pos_trace + size_trace) / total_len;
+
+                        stroke = Stroke::new(
+                            (drawing_settings.line_thickness as f32 * len as f32).clamp(0.01, 10.0),
+                            color,
+                        );
+                    } else {
+                        break;
+                    }
+                }
+
+                pos_trace += size_trace;
+            }
+        }
+    }
+
+    if let Some((pos, radius)) = circle {
+        painter.circle_filled(glam_to_egui(pos), radius as f32, Color32::YELLOW);
     }
 }
 
@@ -498,51 +631,71 @@ impl eframe::App for Portals2D {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().frame(egui::Frame::default().inner_margin(0.).fill(ctx.style().visuals.panel_fill)).show(ctx, |ui| {
-           let (_, painter) =
-            ui.allocate_painter(Vec2::new(ui.available_width(), ui.available_height()), Sense::hover());
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::default()
+                    .inner_margin(0.)
+                    .fill(ctx.style().visuals.panel_fill),
+            )
+            .show(ctx, |ui| {
+                let (_, painter) = ui.allocate_painter(
+                    Vec2::new(ui.available_width(), ui.available_height()),
+                    Sense::hover(),
+                );
 
-            let stroke = Stroke::new(1.5, Color32::YELLOW);
-            painter.line_segment([glam_to_egui(self.segment.start), glam_to_egui(self.segment.end)], stroke);
+                let stroke = Stroke::new(1.5, Color32::YELLOW);
+                painter.line_segment(
+                    [
+                        glam_to_egui(self.segment.start),
+                        glam_to_egui(self.segment.end),
+                    ],
+                    stroke,
+                );
 
-            let rays = segment_perpendicular_points(&self.segment);
-            for ray in rays {
-                let segments = travel_ray(&ray, &self.portal, &self.rendering_settings);
+                let rays = segment_perpendicular_points(&self.segment);
+                for ray in rays {
+                    let segments = travel_ray(&ray, &self.portal, &self.rendering_settings);
+                    draw_segments(&painter, &segments, &self.drawing_settings);
+                }
+
+                let rays = position_angular_rays(&self.cone);
+                for ray in rays {
+                    let segments = travel_ray(&ray, &self.portal, &self.rendering_settings);
+                    draw_segments(&painter, &segments, &self.drawing_settings);
+                }
+
+                let segments = travel_ray(&self.ray, &self.portal, &self.rendering_settings);
                 draw_segments(&painter, &segments, &self.drawing_settings);
-            }
 
-            let rays = position_angular_rays(&self.cone);
-            for ray in rays {
-                let segments = travel_ray(&ray, &self.portal, &self.rendering_settings);
-                draw_segments(&painter, &segments, &self.drawing_settings);
-            }
+                painter.circle_stroke(
+                    glam_to_egui(self.portal.c1.pos),
+                    (self.portal.c1.r - self.drawing_settings.portal_thickness / 2.) as f32,
+                    Stroke::new(
+                        self.drawing_settings.portal_thickness as f32,
+                        Color32::ORANGE,
+                    ),
+                );
 
-            let segments = travel_ray(&self.ray, &self.portal, &self.rendering_settings);
-            draw_segments(&painter, &segments, &self.drawing_settings);
+                painter.circle_stroke(
+                    glam_to_egui(self.portal.c2.pos),
+                    (self.portal.c2.r - self.drawing_settings.portal_thickness / 2.) as f32,
+                    Stroke::new(
+                        self.drawing_settings.portal_thickness as f32,
+                        Color32::LIGHT_BLUE,
+                    ),
+                );
 
-            painter.circle_stroke(
-                glam_to_egui(self.portal.c1.pos),
-                (self.portal.c1.r - self.drawing_settings.portal_thickness / 2.) as f32,
-                Stroke::new(self.drawing_settings.portal_thickness as f32, Color32::ORANGE)
-            );
+                point_ui(ui, &mut self.portal.c1.pos, 1., 1.);
+                point_ui(ui, &mut self.portal.c2.pos, 1., 1.);
 
-            painter.circle_stroke(
-                glam_to_egui(self.portal.c2.pos),
-                (self.portal.c2.r - self.drawing_settings.portal_thickness / 2.) as f32,
-                Stroke::new(self.drawing_settings.portal_thickness as f32, Color32::LIGHT_BLUE)
-            );
+                point_direction_ui(ui, self.ray.o, &mut self.ray.d, 1., 1.);
+                point_ui(ui, &mut self.ray.o, 1., 1.);
 
-            point_ui(ui, &mut self.portal.c1.pos, 1., 1.);
-            point_ui(ui, &mut self.portal.c2.pos, 1., 1.);
+                point_ui(ui, &mut self.segment.start, 1., 1.);
+                point_ui(ui, &mut self.segment.end, 1., 1.);
 
-            point_direction_ui(ui, self.ray.o, &mut self.ray.d, 1., 1.);
-            point_ui(ui, &mut self.ray.o, 1., 1.);
-
-            point_ui(ui, &mut self.segment.start, 1., 1.);
-            point_ui(ui, &mut self.segment.end, 1., 1.);
-
-            point_ui(ui, &mut self.cone.position, 1., 1.);
-        });
+                point_ui(ui, &mut self.cone.position, 1., 1.);
+            });
 
         egui::Window::new("Parameters")
             .resizable(true)
@@ -568,9 +721,21 @@ impl eframe::App for Portals2D {
                 });
                 ui.horizontal(|ui| {
                     ui.label("Portal type:");
-                    ui.selectable_value(&mut self.portal.portal_type, PortalType::Regular, "Regular");
-                    ui.selectable_value(&mut self.portal.portal_type, PortalType::Wormhole, "Wormhole");
-                    ui.selectable_value(&mut self.portal.portal_type, PortalType::Perspective, "Perspective");
+                    ui.selectable_value(
+                        &mut self.portal.portal_type,
+                        PortalType::Regular,
+                        "Regular",
+                    );
+                    ui.selectable_value(
+                        &mut self.portal.portal_type,
+                        PortalType::Wormhole,
+                        "Wormhole",
+                    );
+                    ui.selectable_value(
+                        &mut self.portal.portal_type,
+                        PortalType::Perspective,
+                        "Perspective",
+                    );
                 });
                 ui.horizontal(|ui| {
                     ui.label("Ray:");
@@ -604,7 +769,9 @@ impl eframe::App for Portals2D {
                 ui.label("Rendering settings");
                 ui.horizontal(|ui| {
                     ui.label("Depth: ");
-                    ui.add(DragValue::new(&mut self.rendering_settings.max_teleportations));
+                    ui.add(DragValue::new(
+                        &mut self.rendering_settings.max_teleportations,
+                    ));
                 });
                 // todo: other
                 ui.separator();
@@ -614,10 +781,33 @@ impl eframe::App for Portals2D {
                     egui_f64(ui, &mut self.drawing_settings.line_thickness);
                 });
                 ui.horizontal(|ui| {
+                    ui.label("Light position: ");
+                    egui_f64(ui, &mut self.drawing_settings.light_position);
+                });
+                ui.add(egui::Checkbox::new(
+                    &mut self.drawing_settings.draw_after_position,
+                    "Draw after position",
+                ));
+                ui.add(egui::Checkbox::new(
+                    &mut self.drawing_settings.draw_trace,
+                    "Draw trace",
+                ));
+                ui.horizontal(|ui| {
+                    ui.label("Light radius: ");
+                    egui_f64(ui, &mut self.drawing_settings.light_radius);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Trace size: ");
+                    egui_f64(ui, &mut self.drawing_settings.trace_size);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Trace count: ");
+                    ui.add(DragValue::new(&mut self.drawing_settings.trace_count));
+                });
+                ui.horizontal(|ui| {
                     ui.label("Portal thickness: ");
                     egui_f64(ui, &mut self.drawing_settings.portal_thickness);
                 });
             });
     }
 }
-
