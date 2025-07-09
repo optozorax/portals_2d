@@ -11,11 +11,21 @@ use glam::DVec2;
 use glam::DVec3;
 use std::f64::consts::PI;
 
-#[derive(serde::Deserialize, serde::Serialize, Default, Clone)]
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
 pub struct Circle {
     pos: DVec2,
     rot: f64,
     r: f64,
+}
+
+impl Default for Circle {
+    fn default() -> Self {
+        Circle {
+            pos: DVec2::ZERO,
+            rot: 0.,
+            r: 1.,
+        }
+    }
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Default, Clone, Copy, Debug, PartialEq)]
@@ -26,17 +36,44 @@ pub enum PortalType {
     Wormhole,
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Default, Clone)]
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
 pub struct Portal {
     c1: Circle,
     c2: Circle,
     portal_type: PortalType,
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Default, Clone)]
+impl Default for Portal {
+    fn default() -> Self {
+        Self {
+            c1: Circle {
+                pos: DVec2::new(-1., 0.),
+                rot: 0.,
+                r: 1.,
+            },
+            c2: Circle {
+                pos: DVec2::new(1., 0.),
+                rot: 0.,
+                r: 1.,
+            },
+            portal_type: Default::default(),
+        }
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
 pub struct Ray {
     o: DVec2,
     d: DVec2,
+}
+
+impl Default for Ray {
+    fn default() -> Self {
+        Self {
+            o: DVec2::new(0., 0.),
+            d: DVec2::new(1., 0.),
+        }
+    }
 }
 
 impl Ray {
@@ -333,19 +370,40 @@ fn position_angular_rays(cone: &ConeLight) -> Vec<Ray> {
     result
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Default)]
+#[derive(serde::Deserialize, serde::Serialize)]
 pub struct SegmentLight {
     start: DVec2,
     end: DVec2,
     count: u32,
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Default)]
+impl Default for SegmentLight {
+    fn default() -> Self {
+        Self {
+            start: DVec2::new(-1., 1.0),
+            end: DVec2::new(1., 1.0),
+            count: 10,
+        }
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
 pub struct ConeLight {
     position: DVec2,
     orientation: f64,
     spread: f64,
     count: u32,
+}
+
+impl Default for ConeLight {
+    fn default() -> Self {
+        Self {
+            position: DVec2::new(-1., -1.0),
+            orientation: 0.,
+            spread: 0.1,
+            count: 10,
+        }
+    }
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -358,8 +416,8 @@ struct RenderingSettings {
 impl Default for RenderingSettings {
     fn default() -> Self {
         Self {
-            max_teleportations: 1000,
-            end_offset: 1000.,
+            max_teleportations: 100,
+            end_offset: 100.,
             ray_offset: 0.0001,
         }
     }
@@ -382,24 +440,33 @@ struct DrawingSettings {
 impl Default for DrawingSettings {
     fn default() -> Self {
         Self {
-            line_thickness: 1.,
-            portal_thickness: 1.,
+            line_thickness: 0.005,
+            portal_thickness: 0.01,
             draw_after_position: true,
             light_position: 0.,
-            light_radius: 2.0,
+            light_radius: 0.01,
 
-            trace_size: 100.,
-            trace_count: 10,
+            trace_size: 1.,
+            trace_count: 20,
             draw_trace: true,
         }
     }
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Default, Debug)]
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
 #[serde(default)]
 struct Camera {
     pos: DVec2,
     scale: f64,
+}
+
+impl Default for Camera {
+    fn default() -> Self {
+        Self {
+            pos: DVec2::ZERO,
+            scale: 1.,
+        }
+    }
 }
 
 impl Camera {
@@ -581,11 +648,6 @@ impl PainterWrapper<'_> {
         (self.transform * glam::DVec3::new(a.x, a.y, 1.)).xy()
     }
 
-    fn transform_direction(&self, a: DVec2) -> DVec2 {
-        use glam::swizzles::Vec3Swizzles;
-        (self.transform * glam::DVec3::new(a.x, a.y, 0.)).xy()
-    }
-
     fn transform_distance(&self, d: f64) -> f64 {
         (self.transform * glam::DVec3::new(d, 0., 0.)).x
     }
@@ -717,6 +779,8 @@ impl eframe::App for Portals2D {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        ctx.set_theme(egui::Theme::Dark);
+
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
@@ -728,10 +792,20 @@ impl eframe::App for Portals2D {
                     Vec2::new(ui.available_width(), ui.available_height()),
                     Sense::hover(),
                 );
-                let mat = self.camera.get_matrix();
+                let available_size = ui.max_rect().size();
+                let window_scale = available_size.x.min(available_size.y);
+                let mat_orig = self.camera.get_matrix();
+                let screen_mat =
+                    DMat3::from_translation(
+                        DVec2::new(available_size.x as f64, available_size.y as f64) / 2.,
+                    ) * DMat3::from_scale(DVec2::new(window_scale as f64, window_scale as f64));
+                let mat = screen_mat * self.camera.get_matrix();
                 let painter = PainterWrapper::new(&painter, mat);
 
-                let stroke = Stroke::new(1.5, Color32::YELLOW);
+                let stroke = Stroke::new(
+                    self.drawing_settings.portal_thickness as f32,
+                    Color32::YELLOW,
+                );
                 painter.line_segment(self.segment.start, self.segment.end, stroke);
 
                 let rays = segment_perpendicular_points(&self.segment);
@@ -782,8 +856,10 @@ impl eframe::App for Portals2D {
                 if response.dragged() {
                     ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Move);
                     let delta = response.drag_delta();
-                    self.camera.pos.x += delta.x as f64;
-                    self.camera.pos.y += delta.y as f64;
+                    let delta = (screen_mat.inverse()
+                        * DVec3::new(delta.x as f64, delta.y as f64, 0.))
+                    .xy();
+                    self.camera.pos += delta;
                     response.mark_changed();
                 }
                 let wheel = ui.ctx().input(|r| r.smooth_scroll_delta);
@@ -791,7 +867,7 @@ impl eframe::App for Portals2D {
                     if let Some(pos) = response.hover_pos() {
                         let pos = (mat.inverse() * DVec3::new(pos.x as f64, pos.y as f64, 1.)).xy();
                         let scale = 1.003_f64.powf(wheel.y as f64);
-                        let mat1 = mat
+                        let mat1 = mat_orig
                             * DMat3::from_translation(pos)
                             * DMat3::from_scale(DVec2::new(scale, scale))
                             * DMat3::from_translation(-pos);
@@ -882,11 +958,11 @@ impl eframe::App for Portals2D {
                 ui.label("Drawing settings");
                 ui.horizontal(|ui| {
                     ui.label("Line thickness: ");
-                    egui_f64(ui, &mut self.drawing_settings.line_thickness);
+                    egui_f64_positive(ui, &mut self.drawing_settings.line_thickness);
                 });
                 ui.horizontal(|ui| {
                     ui.label("Light position: ");
-                    egui_f64(ui, &mut self.drawing_settings.light_position);
+                    egui_f64_positive(ui, &mut self.drawing_settings.light_position);
                 });
                 ui.add(egui::Checkbox::new(
                     &mut self.drawing_settings.draw_after_position,
@@ -898,11 +974,11 @@ impl eframe::App for Portals2D {
                 ));
                 ui.horizontal(|ui| {
                     ui.label("Light radius: ");
-                    egui_f64(ui, &mut self.drawing_settings.light_radius);
+                    egui_f64_positive(ui, &mut self.drawing_settings.light_radius);
                 });
                 ui.horizontal(|ui| {
                     ui.label("Trace size: ");
-                    egui_f64(ui, &mut self.drawing_settings.trace_size);
+                    egui_f64_positive(ui, &mut self.drawing_settings.trace_size);
                 });
                 ui.horizontal(|ui| {
                     ui.label("Trace count: ");
@@ -910,7 +986,7 @@ impl eframe::App for Portals2D {
                 });
                 ui.horizontal(|ui| {
                     ui.label("Portal thickness: ");
-                    egui_f64(ui, &mut self.drawing_settings.portal_thickness);
+                    egui_f64_positive(ui, &mut self.drawing_settings.portal_thickness);
                 });
                 ui.separator();
                 ui.horizontal(|ui| {
@@ -918,7 +994,13 @@ impl eframe::App for Portals2D {
                     egui_f64(ui, &mut self.camera.pos.x);
                     egui_f64(ui, &mut self.camera.pos.y);
                     ui.separator();
-                    egui_f64_positive(ui, &mut self.camera.scale);
+                    ui.add(
+                        DragValue::new(&mut self.camera.scale)
+                            .speed(0.01)
+                            .range(0.001..=1000.0)
+                            .min_decimals(0)
+                            .max_decimals(2),
+                    );
                 });
             });
     }
