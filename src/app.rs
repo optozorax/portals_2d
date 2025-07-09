@@ -1,12 +1,15 @@
 use egui::Color32;
 use egui::DragValue;
+use egui::Painter;
 use egui::Sense;
 use egui::Stroke;
 use egui::Ui;
 use egui::Vec2;
-use std::f64::consts::PI;
-
+use glam::swizzles::Vec3Swizzles;
+use glam::DMat3;
 use glam::DVec2;
+use glam::DVec3;
+use std::f64::consts::PI;
 
 #[derive(serde::Deserialize, serde::Serialize, Default, Clone)]
 pub struct Circle {
@@ -392,30 +395,31 @@ impl Default for DrawingSettings {
     }
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(serde::Deserialize, serde::Serialize, Default, Debug)]
+#[serde(default)]
+struct Camera {
+    pos: DVec2,
+    scale: f64,
+}
+
+impl Camera {
+    fn get_matrix(&self) -> DMat3 {
+        DMat3::from_scale_angle_translation(DVec2::new(self.scale, self.scale), 0., self.pos)
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Default)]
 #[serde(default)]
 pub struct Portals2D {
     portal: Portal,
     ray: Ray,
     segment: SegmentLight,
     cone: ConeLight,
+    camera: Camera,
 
     rendering_settings: RenderingSettings,
 
     drawing_settings: DrawingSettings,
-}
-
-impl Default for Portals2D {
-    fn default() -> Self {
-        Self {
-            portal: Portal::default(),
-            ray: Default::default(),
-            segment: Default::default(),
-            cone: Default::default(),
-            rendering_settings: Default::default(),
-            drawing_settings: Default::default(),
-        }
-    }
 }
 
 impl Portals2D {
@@ -459,6 +463,19 @@ pub fn point_ui(ui: &mut egui::Ui, pos: &mut DVec2, coef_x: f64, coef_y: f64) ->
     response
 }
 
+pub fn point_ui_mat(
+    ui: &mut egui::Ui,
+    mat: DMat3,
+    pos: &mut DVec2,
+    coef_x: f64,
+    coef_y: f64,
+) -> egui::Response {
+    *pos = (mat * DVec3::new(pos.x, pos.y, 1.)).xy();
+    let res = point_ui(ui, pos, coef_x, coef_y);
+    *pos = (mat.inverse() * DVec3::new(pos.x, pos.y, 1.)).xy();
+    res
+}
+
 pub fn point_direction_ui(
     ui: &mut egui::Ui,
     pos: DVec2,
@@ -469,6 +486,21 @@ pub fn point_direction_ui(
     let mut pos2 = pos + *dir;
     let res = point_ui(ui, &mut pos2, coef_x, coef_y);
     *dir = pos2 - pos;
+    res
+}
+
+pub fn point_direction_ui_mat(
+    ui: &mut egui::Ui,
+    mat: DMat3,
+    mut pos: DVec2,
+    dir: &mut DVec2,
+    coef_x: f64,
+    coef_y: f64,
+) -> egui::Response {
+    pos = (mat * DVec3::new(pos.x, pos.y, 1.)).xy();
+    *dir = (mat * DVec3::new(dir.x, dir.y, 0.)).xy();
+    let res = point_direction_ui(ui, pos, dir, coef_x, coef_y);
+    *dir = (mat.inverse() * DVec3::new(dir.x, dir.y, 0.)).xy();
     res
 }
 
@@ -532,8 +564,63 @@ pub fn egui_f64_positive(ui: &mut Ui, value: &mut f64) -> bool {
     })
 }
 
+struct PainterWrapper<'a> {
+    painter: &'a Painter,
+    transform: DMat3,
+}
+
+impl<'a> PainterWrapper<'a> {
+    fn new(painter: &'a Painter, transform: DMat3) -> PainterWrapper<'a> {
+        Self { painter, transform }
+    }
+}
+
+impl PainterWrapper<'_> {
+    fn transform_position(&self, a: DVec2) -> DVec2 {
+        use glam::swizzles::Vec3Swizzles;
+        (self.transform * glam::DVec3::new(a.x, a.y, 1.)).xy()
+    }
+
+    fn transform_direction(&self, a: DVec2) -> DVec2 {
+        use glam::swizzles::Vec3Swizzles;
+        (self.transform * glam::DVec3::new(a.x, a.y, 0.)).xy()
+    }
+
+    fn transform_distance(&self, d: f64) -> f64 {
+        (self.transform * glam::DVec3::new(d, 0., 0.)).x
+    }
+
+    fn line_segment(&self, a: DVec2, b: DVec2, mut stroke: Stroke) {
+        stroke.width *= self.transform_distance(1.) as f32;
+        self.painter.line_segment(
+            [
+                glam_to_egui(self.transform_position(a)),
+                glam_to_egui(self.transform_position(b)),
+            ],
+            stroke,
+        );
+    }
+
+    fn circle_filled(&self, pos: DVec2, radius: f64, color: Color32) {
+        self.painter.circle_filled(
+            glam_to_egui(self.transform_position(pos)),
+            self.transform_distance(radius) as f32,
+            color,
+        );
+    }
+
+    fn circle_stroke(&self, pos: DVec2, radius: f64, mut stroke: Stroke) {
+        stroke.width *= self.transform_distance(1.) as f32;
+        self.painter.circle_stroke(
+            glam_to_egui(self.transform_position(pos)),
+            self.transform_distance(radius) as f32,
+            stroke,
+        );
+    }
+}
+
 fn draw_segments(
-    painter: &egui::Painter,
+    painter: &PainterWrapper<'_>,
     segments: &[(DVec2, DVec2, f64)],
     drawing_settings: &DrawingSettings,
 ) {
@@ -555,13 +642,13 @@ fn draw_segments(
             let point = start + (end - start) * t;
             circle = Some((point, drawing_settings.light_radius * *len));
             if !drawing_settings.draw_after_position {
-                painter.line_segment([glam_to_egui(*start), glam_to_egui(point)], stroke);
+                painter.line_segment(*start, point, stroke);
                 break;
             }
         }
         pos -= total_len;
 
-        painter.line_segment([glam_to_egui(*start), glam_to_egui(*end)], stroke);
+        painter.line_segment(*start, *end, stroke);
     }
 
     let mut segment_iter = segments.iter();
@@ -588,8 +675,7 @@ fn draw_segments(
                     if t1 <= 1. && t2 > 0. {
                         let seg_start = start + (end - start) * t1.clamp(0., 1.);
                         let seg_end = start + (end - start) * t2.clamp(0., 1.);
-                        painter
-                            .line_segment([glam_to_egui(seg_start), glam_to_egui(seg_end)], stroke);
+                        painter.line_segment(seg_start, seg_end, stroke);
                     }
 
                     if t2 > 1. {
@@ -621,7 +707,7 @@ fn draw_segments(
     }
 
     if let Some((pos, radius)) = circle {
-        painter.circle_filled(glam_to_egui(pos), radius as f32, Color32::YELLOW);
+        painter.circle_filled(pos, radius, Color32::YELLOW);
     }
 }
 
@@ -642,15 +728,11 @@ impl eframe::App for Portals2D {
                     Vec2::new(ui.available_width(), ui.available_height()),
                     Sense::hover(),
                 );
+                let mat = self.camera.get_matrix();
+                let painter = PainterWrapper::new(&painter, mat);
 
                 let stroke = Stroke::new(1.5, Color32::YELLOW);
-                painter.line_segment(
-                    [
-                        glam_to_egui(self.segment.start),
-                        glam_to_egui(self.segment.end),
-                    ],
-                    stroke,
-                );
+                painter.line_segment(self.segment.start, self.segment.end, stroke);
 
                 let rays = segment_perpendicular_points(&self.segment);
                 for ray in rays {
@@ -668,8 +750,8 @@ impl eframe::App for Portals2D {
                 draw_segments(&painter, &segments, &self.drawing_settings);
 
                 painter.circle_stroke(
-                    glam_to_egui(self.portal.c1.pos),
-                    (self.portal.c1.r - self.drawing_settings.portal_thickness / 2.) as f32,
+                    self.portal.c1.pos,
+                    self.portal.c1.r - self.drawing_settings.portal_thickness / 2.,
                     Stroke::new(
                         self.drawing_settings.portal_thickness as f32,
                         Color32::ORANGE,
@@ -677,24 +759,46 @@ impl eframe::App for Portals2D {
                 );
 
                 painter.circle_stroke(
-                    glam_to_egui(self.portal.c2.pos),
-                    (self.portal.c2.r - self.drawing_settings.portal_thickness / 2.) as f32,
+                    self.portal.c2.pos,
+                    self.portal.c2.r - self.drawing_settings.portal_thickness / 2.,
                     Stroke::new(
                         self.drawing_settings.portal_thickness as f32,
                         Color32::LIGHT_BLUE,
                     ),
                 );
 
-                point_ui(ui, &mut self.portal.c1.pos, 1., 1.);
-                point_ui(ui, &mut self.portal.c2.pos, 1., 1.);
+                point_ui_mat(ui, mat, &mut self.portal.c1.pos, 1., 1.);
+                point_ui_mat(ui, mat, &mut self.portal.c2.pos, 1., 1.);
 
-                point_direction_ui(ui, self.ray.o, &mut self.ray.d, 1., 1.);
-                point_ui(ui, &mut self.ray.o, 1., 1.);
+                point_direction_ui_mat(ui, mat, self.ray.o, &mut self.ray.d, 1., 1.);
+                point_ui_mat(ui, mat, &mut self.ray.o, 1., 1.);
 
-                point_ui(ui, &mut self.segment.start, 1., 1.);
-                point_ui(ui, &mut self.segment.end, 1., 1.);
+                point_ui_mat(ui, mat, &mut self.segment.start, 1., 1.);
+                point_ui_mat(ui, mat, &mut self.segment.end, 1., 1.);
 
-                point_ui(ui, &mut self.cone.position, 1., 1.);
+                point_ui_mat(ui, mat, &mut self.cone.position, 1., 1.);
+
+                let mut response = ui.allocate_rect(egui::Rect::EVERYTHING, egui::Sense::drag());
+                if response.dragged() {
+                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Move);
+                    let delta = response.drag_delta();
+                    self.camera.pos.x += delta.x as f64;
+                    self.camera.pos.y += delta.y as f64;
+                    response.mark_changed();
+                }
+                let wheel = ui.ctx().input(|r| r.smooth_scroll_delta);
+                if response.hovered() && wheel.y != 0. {
+                    if let Some(pos) = response.hover_pos() {
+                        let pos = (mat.inverse() * DVec3::new(pos.x as f64, pos.y as f64, 1.)).xy();
+                        let scale = 1.003_f64.powf(wheel.y as f64);
+                        let mat1 = mat
+                            * DMat3::from_translation(pos)
+                            * DMat3::from_scale(DVec2::new(scale, scale))
+                            * DMat3::from_translation(-pos);
+                        self.camera.pos = (mat1 * DVec3::new(0., 0., 1.)).xy();
+                        self.camera.scale = (mat1 * DVec3::new(1., 0., 0.)).x;
+                    }
+                }
             });
 
         egui::Window::new("Parameters")
@@ -807,6 +911,14 @@ impl eframe::App for Portals2D {
                 ui.horizontal(|ui| {
                     ui.label("Portal thickness: ");
                     egui_f64(ui, &mut self.drawing_settings.portal_thickness);
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("Camera: ");
+                    egui_f64(ui, &mut self.camera.pos.x);
+                    egui_f64(ui, &mut self.camera.pos.y);
+                    ui.separator();
+                    egui_f64_positive(ui, &mut self.camera.scale);
                 });
             });
     }
