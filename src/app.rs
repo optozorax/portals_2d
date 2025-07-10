@@ -47,12 +47,12 @@ impl Default for Portal {
     fn default() -> Self {
         Self {
             c1: Circle {
-                pos: DVec2::new(-1., 0.),
+                pos: DVec2::new(-1.01, 0.),
                 rot: 0.,
                 r: 1.,
             },
             c2: Circle {
-                pos: DVec2::new(1., 0.),
+                pos: DVec2::new(1.01, 0.),
                 rot: 0.,
                 r: 1.,
             },
@@ -70,8 +70,8 @@ pub struct Ray {
 impl Default for Ray {
     fn default() -> Self {
         Self {
-            o: DVec2::new(0., 0.),
-            d: DVec2::new(1., 0.),
+            o: DVec2::new(-2.5, 0.5),
+            d: DVec2::new(0.2, 0.),
         }
     }
 }
@@ -380,9 +380,9 @@ pub struct SegmentLight {
 impl Default for SegmentLight {
     fn default() -> Self {
         Self {
-            start: DVec2::new(-1., 1.0),
-            end: DVec2::new(1., 1.0),
-            count: 10,
+            start: DVec2::new(1.5, 1.5),
+            end: DVec2::new(0.5, 1.5),
+            count: 20,
         }
     }
 }
@@ -398,9 +398,9 @@ pub struct ConeLight {
 impl Default for ConeLight {
     fn default() -> Self {
         Self {
-            position: DVec2::new(-1., -1.0),
+            position: DVec2::new(-2.5, -0.5),
             orientation: 0.,
-            spread: 0.1,
+            spread: 0.2,
             count: 10,
         }
     }
@@ -443,7 +443,7 @@ impl Default for DrawingSettings {
             line_thickness: 0.005,
             portal_thickness: 0.01,
             draw_after_position: true,
-            light_position: 0.,
+            light_position: 1.5,
             light_radius: 0.01,
 
             trace_size: 1.,
@@ -464,7 +464,7 @@ impl Default for Camera {
     fn default() -> Self {
         Self {
             pos: DVec2::ZERO,
-            scale: 1.,
+            scale: 0.3,
         }
     }
 }
