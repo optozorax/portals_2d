@@ -862,11 +862,10 @@ impl eframe::App for Portals2D {
                     self.camera.pos += delta;
                     response.mark_changed();
                 }
-                let wheel = ui.ctx().input(|r| r.smooth_scroll_delta);
-                if response.hovered() && wheel.y != 0. {
+                let scale = ui.ctx().input(|r| 1.003_f64.powf(r.smooth_scroll_delta.y as f64) * r.zoom_delta() as f64);
+                if response.hovered() && scale != 1. {
                     if let Some(pos) = response.hover_pos() {
                         let pos = (mat.inverse() * DVec3::new(pos.x as f64, pos.y as f64, 1.)).xy();
-                        let scale = 1.003_f64.powf(wheel.y as f64);
                         let mat1 = mat_orig
                             * DMat3::from_translation(pos)
                             * DMat3::from_scale(DVec2::new(scale, scale))
@@ -881,6 +880,11 @@ impl eframe::App for Portals2D {
             .resizable(true)
             .default_width(250.0)
             .show(ctx, |ui| {
+                if ui.button("Reset").clicked() {
+                     ui.memory_mut(|mem| *mem = Default::default());
+                     *self = Default::default();
+                }
+                ui.separator();
                 ui.horizontal(|ui| {
                     ui.label("Portal 1:");
                     egui_f64(ui, &mut self.portal.c1.pos.x);
