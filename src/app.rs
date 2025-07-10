@@ -440,7 +440,7 @@ struct DrawingSettings {
 impl Default for DrawingSettings {
     fn default() -> Self {
         Self {
-            line_thickness: 0.005,
+            line_thickness: 0.01,
             portal_thickness: 0.01,
             draw_after_position: true,
             light_position: 1.5,
@@ -692,7 +692,7 @@ fn draw_segments(
     let mut pos = drawing_settings.light_position;
     for (start, end, len) in segments {
         let stroke = Stroke::new(
-            (drawing_settings.line_thickness as f32 * *len as f32).clamp(0.01, 10.0),
+            drawing_settings.line_thickness as f32 * *len as f32,
             color,
         );
 
@@ -726,7 +726,7 @@ fn draw_segments(
             {
                 let color = Color32::LIGHT_BLUE.gamma_multiply(opacity);
                 let mut stroke = Stroke::new(
-                    (drawing_settings.line_thickness as f32 * len as f32).clamp(0.01, 10.0),
+                    drawing_settings.line_thickness as f32 * len as f32,
                     color,
                 );
 
@@ -755,7 +755,7 @@ fn draw_segments(
                         t2 = (pos_trace + size_trace) / total_len;
 
                         stroke = Stroke::new(
-                            (drawing_settings.line_thickness as f32 * len as f32).clamp(0.01, 10.0),
+                            drawing_settings.line_thickness as f32 * len as f32,
                             color,
                         );
                     } else {
