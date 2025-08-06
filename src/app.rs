@@ -11,21 +11,21 @@ use glam::DVec2;
 use glam::DVec3;
 use std::f64::consts::PI;
 
-#[derive(serde::Deserialize, serde::Serialize, Clone)]
-pub struct Circle {
-    pos: DVec2,
-    rot: f64,
-    r: f64,
+fn trs_to_mat(pos: DVec2, rot: f64, scale: f64) -> DMat3 {
+    DMat3::from_scale_angle_translation(DVec2::splat(scale), rot, pos)
 }
 
-impl Default for Circle {
-    fn default() -> Self {
-        Circle {
-            pos: DVec2::ZERO,
-            rot: 0.,
-            r: 1.,
-        }
-    }
+fn mat_to_trs(mat: &DMat3) -> (DVec2, f64, f64) {
+    let pos = mat.z_axis.xy();
+    let x_axis = mat.x_axis.xy();
+    let scale = x_axis.length();
+    let rot = x_axis.y.atan2(x_axis.x);
+    (pos, rot, scale)
+}
+
+fn set_pos(mat: &mut DMat3, pos: DVec2) {
+    let (_, rot, scale) = mat_to_trs(mat);
+    *mat = trs_to_mat(pos, rot, scale);
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Default, Clone, Copy, Debug, PartialEq)]
@@ -38,24 +38,16 @@ pub enum PortalType {
 
 #[derive(serde::Deserialize, serde::Serialize, Clone)]
 pub struct Portal {
-    c1: Circle,
-    c2: Circle,
+    c1: DMat3,
+    c2: DMat3,
     portal_type: PortalType,
 }
 
 impl Default for Portal {
     fn default() -> Self {
         Self {
-            c1: Circle {
-                pos: DVec2::new(-1.01, 0.),
-                rot: 0.,
-                r: 1.,
-            },
-            c2: Circle {
-                pos: DVec2::new(1.01, 0.),
-                rot: 0.,
-                r: 1.,
-            },
+            c1: trs_to_mat(DVec2::new(-1.01, 0.), 0.0, 1.0),
+            c2: trs_to_mat(DVec2::new(1.01, 0.), 0.0, 1.0),
             portal_type: Default::default(),
         }
     }
@@ -89,23 +81,17 @@ impl Ray {
     }
 }
 
-fn ray_circle_intersection(ray: &Ray, circle: &Circle) -> Option<f64> {
-    let oc = ray.o - circle.pos;
-
+fn ray_circle_intersection(ray: &Ray) -> Option<f64> {
     let a = ray.d.dot(ray.d);
-    let b = 2.0 * oc.dot(ray.d);
-    let c = oc.dot(oc) - circle.r * circle.r;
-
+    let b = 2.0 * ray.o.dot(ray.d);
+    let c = ray.o.dot(ray.o) - 1.0;
     let discriminant = b * b - 4.0 * a * c;
-
     if discriminant < 0.0 {
         return None;
     }
-
     let sqrt_discriminant = discriminant.sqrt();
     let t1 = (-b - sqrt_discriminant) / (2.0 * a);
     let t2 = (-b + sqrt_discriminant) / (2.0 * a);
-
     if t1 >= 0.0 && t2 >= 0.0 {
         Some(t1.min(t2))
     } else if t1 >= 0.0 {
@@ -117,81 +103,49 @@ fn ray_circle_intersection(ray: &Ray, circle: &Circle) -> Option<f64> {
     }
 }
 
-fn teleport_position(pos: DVec2, from: &Circle, to: &Circle) -> DVec2 {
-    let x_local = pos.x - from.pos.x;
-    let y_local = pos.y - from.pos.y;
-
-    let cos_r1 = (-from.rot).cos();
-    let sin_r1 = (-from.rot).sin();
-    let x_rot = x_local * cos_r1 - y_local * sin_r1;
-    let y_rot = x_local * sin_r1 + y_local * cos_r1;
-
-    let x_local_final = x_rot / from.r;
-    let y_local_final = y_rot / from.r;
-
-    let x_scaled = x_local_final * to.r;
-    let y_scaled = y_local_final * to.r;
-
-    let cos_r2 = to.rot.cos();
-    let sin_r2 = to.rot.sin();
-    let x_rot2 = x_scaled * cos_r2 - y_scaled * sin_r2;
-    let y_rot2 = x_scaled * sin_r2 + y_scaled * cos_r2;
-
-    let x_final = x_rot2 + to.pos.x;
-    let y_final = y_rot2 + to.pos.y;
-
-    DVec2::new(x_final, y_final)
+fn teleport_position(pos: DVec2, from: &DMat3, to: &DMat3) -> DVec2 {
+    let local = from.inverse().transform_point2(pos);
+    to.transform_point2(local)
 }
 
-fn teleport_direction(dir: DVec2, from: &Circle, to: &Circle) -> DVec2 {
-    let cos_r1 = (-from.rot).cos();
-    let sin_r1 = (-from.rot).sin();
-    let x_rot = dir.x * cos_r1 - dir.y * sin_r1;
-    let y_rot = dir.x * sin_r1 + dir.y * cos_r1;
-
-    let x_local = x_rot / from.r;
-    let y_local = y_rot / from.r;
-
-    let x_scaled = x_local * to.r;
-    let y_scaled = y_local * to.r;
-
-    let cos_r2 = to.rot.cos();
-    let sin_r2 = to.rot.sin();
-    let x_final = x_scaled * cos_r2 - y_scaled * sin_r2;
-    let y_final = x_scaled * sin_r2 + y_scaled * cos_r2;
-
-    DVec2::new(x_final, y_final)
+fn teleport_direction(dir: DVec2, from: &DMat3, to: &DMat3) -> DVec2 {
+    let local = from.inverse().transform_vector2(dir);
+    to.transform_vector2(local)
 }
 
-fn circle_invert_ray_direction(ray: &Ray, circle: &Circle) -> DVec2 {
-    let p = ray.o - circle.pos;
+fn circle_invert_ray_direction(ray: &Ray) -> DVec2 {
+    let p = ray.o;
     let d = ray.d;
-
     let r2 = p.dot(p);
     if r2 == 0.0 {
         return d;
     }
-
     let dot = p.dot(d);
-
     let num = d * r2 - p * (2.0 * dot);
     let denom = r2 * r2;
-
-    let inv = num * (circle.r * circle.r) / denom;
-
+    let inv = num / denom;
     let orig_len = d.length();
     let inv_len = inv.length();
     if inv_len == 0.0 {
-        return DVec2::ZERO;
+        DVec2::ZERO
+    } else {
+        inv * (orig_len / inv_len)
     }
-
-    let scale = orig_len / inv_len;
-    inv * scale
 }
 
 fn intersect_circle_portal(ray: &Ray, portal: &Portal) -> (Option<f64>, bool, Option<Ray>) {
-    let t1 = ray_circle_intersection(ray, &portal.c1);
-    let t2 = ray_circle_intersection(ray, &portal.c2);
+    let inv1 = portal.c1.inverse();
+    let inv2 = portal.c2.inverse();
+    let ray1 = Ray {
+        o: inv1.transform_point2(ray.o),
+        d: inv1.transform_vector2(ray.d),
+    };
+    let ray2 = Ray {
+        o: inv2.transform_point2(ray.o),
+        d: inv2.transform_vector2(ray.d),
+    };
+    let t1 = ray_circle_intersection(&ray1);
+    let t2 = ray_circle_intersection(&ray2);
 
     if let Some(t1_val) = t1 {
         if t2.is_none() || t1_val < t2.unwrap() {
@@ -200,13 +154,12 @@ fn intersect_circle_portal(ray: &Ray, portal: &Portal) -> (Option<f64>, bool, Op
 
             match portal.portal_type {
                 PortalType::Wormhole => {
-                    new_dir = circle_invert_ray_direction(
-                        &Ray {
-                            o: new_pos,
-                            d: new_dir,
-                        },
-                        &portal.c2,
-                    );
+                    let local_ray = Ray {
+                        o: inv2.transform_point2(new_pos),
+                        d: inv2.transform_vector2(new_dir),
+                    };
+                    let inverted = circle_invert_ray_direction(&local_ray);
+                    new_dir = portal.c2.transform_vector2(inverted);
                 }
                 PortalType::Perspective => {
                     new_dir = -new_dir;
@@ -232,13 +185,12 @@ fn intersect_circle_portal(ray: &Ray, portal: &Portal) -> (Option<f64>, bool, Op
 
             match portal.portal_type {
                 PortalType::Wormhole => {
-                    new_dir = circle_invert_ray_direction(
-                        &Ray {
-                            o: new_pos,
-                            d: new_dir,
-                        },
-                        &portal.c1,
-                    );
+                    let local_ray = Ray {
+                        o: inv1.transform_point2(new_pos),
+                        d: inv1.transform_vector2(new_dir),
+                    };
+                    let inverted = circle_invert_ray_direction(&local_ray);
+                    new_dir = portal.c1.transform_vector2(inverted);
                 }
                 PortalType::Perspective => {
                     new_dir = -new_dir;
@@ -492,13 +444,14 @@ impl Camera {
         if response.dragged() {
             ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Move);
             let delta = response.drag_delta();
-            let delta = (screen_mat.inverse()
-                * DVec3::new(delta.x as f64, delta.y as f64, 0.))
-            .xy();
+            let delta =
+                (screen_mat.inverse() * DVec3::new(delta.x as f64, delta.y as f64, 0.)).xy();
             self.pos += delta;
             response.mark_changed();
         }
-        let scale = ui.ctx().input(|r| 1.003_f64.powf(r.smooth_scroll_delta.y as f64) * r.zoom_delta() as f64);
+        let scale = ui
+            .ctx()
+            .input(|r| 1.003_f64.powf(r.smooth_scroll_delta.y as f64) * r.zoom_delta() as f64);
         if response.hovered() && scale != 1. {
             if let Some(pos) = response.hover_pos() {
                 let pos = (mat.inverse() * DVec3::new(pos.x as f64, pos.y as f64, 1.)).xy();
@@ -729,10 +682,7 @@ fn draw_segments(
     let color = Color32::WHITE.gamma_multiply(0.3);
     let mut pos = drawing_settings.light_position;
     for (start, end, len) in segments {
-        let stroke = Stroke::new(
-            drawing_settings.line_thickness as f32 * *len as f32,
-            color,
-        );
+        let stroke = Stroke::new(drawing_settings.line_thickness as f32 * *len as f32, color);
 
         let len1 = (end - start).length();
         let total_len = len1 / len;
@@ -763,10 +713,8 @@ fn draw_segments(
                 .map(|i| (i, i as f32 / drawing_settings.trace_count as f32))
             {
                 let color = Color32::LIGHT_BLUE.gamma_multiply(opacity);
-                let mut stroke = Stroke::new(
-                    drawing_settings.line_thickness as f32 * len as f32,
-                    color,
-                );
+                let mut stroke =
+                    Stroke::new(drawing_settings.line_thickness as f32 * len as f32, color);
 
                 let mut t1 = pos_trace / total_len;
                 let mut t2 = (pos_trace + size_trace) / total_len;
@@ -792,10 +740,8 @@ fn draw_segments(
                         t1 = pos_trace / total_len;
                         t2 = (pos_trace + size_trace) / total_len;
 
-                        stroke = Stroke::new(
-                            drawing_settings.line_thickness as f32 * len as f32,
-                            color,
-                        );
+                        stroke =
+                            Stroke::new(drawing_settings.line_thickness as f32 * len as f32, color);
                     } else {
                         break;
                     }
@@ -856,26 +802,29 @@ impl eframe::App for Portals2D {
                 let segments = travel_ray(&self.ray, &self.portal, &self.rendering_settings);
                 draw_segments(&painter, &segments, &self.drawing_settings);
 
+                let (mut pos1, _, r1) = mat_to_trs(&self.portal.c1);
                 painter.circle_stroke(
-                    self.portal.c1.pos,
-                    self.portal.c1.r - self.drawing_settings.portal_thickness / 2.,
+                    pos1,
+                    r1 - self.drawing_settings.portal_thickness / 2.,
                     Stroke::new(
                         self.drawing_settings.portal_thickness as f32,
                         Color32::ORANGE,
                     ),
                 );
+                point_ui_mat(ui, mat, &mut pos1, 1., 1.);
+                set_pos(&mut self.portal.c1, pos1);
 
+                let (mut pos2, _, r2) = mat_to_trs(&self.portal.c2);
                 painter.circle_stroke(
-                    self.portal.c2.pos,
-                    self.portal.c2.r - self.drawing_settings.portal_thickness / 2.,
+                    pos2,
+                    r2 - self.drawing_settings.portal_thickness / 2.,
                     Stroke::new(
                         self.drawing_settings.portal_thickness as f32,
                         Color32::LIGHT_BLUE,
                     ),
                 );
-
-                point_ui_mat(ui, mat, &mut self.portal.c1.pos, 1., 1.);
-                point_ui_mat(ui, mat, &mut self.portal.c2.pos, 1., 1.);
+                point_ui_mat(ui, mat, &mut pos2, 1., 1.);
+                set_pos(&mut self.portal.c2, pos2);
 
                 point_direction_ui_mat(ui, mat, self.ray.o, &mut self.ray.d, 1., 1.);
                 point_ui_mat(ui, mat, &mut self.ray.o, 1., 1.);
@@ -893,27 +842,37 @@ impl eframe::App for Portals2D {
             .default_width(250.0)
             .show(ctx, |ui| {
                 if ui.button("Reset").clicked() {
-                     ui.memory_mut(|mem| *mem = Default::default());
-                     *self = Default::default();
+                    ui.memory_mut(|mem| *mem = Default::default());
+                    *self = Default::default();
                 }
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.label("Portal 1:");
-                    egui_f64(ui, &mut self.portal.c1.pos.x);
-                    egui_f64(ui, &mut self.portal.c1.pos.y);
+                    let (mut pos, mut rot, mut r) = mat_to_trs(&self.portal.c1);
+                    let mut changed = false;
+                    changed |= egui_f64(ui, &mut pos.x);
+                    changed |= egui_f64(ui, &mut pos.y);
                     ui.separator();
-                    egui_angle_f64(ui, &mut self.portal.c1.rot);
+                    changed |= egui_angle_f64(ui, &mut rot);
                     ui.separator();
-                    egui_f64_positive(ui, &mut self.portal.c1.r);
+                    changed |= egui_f64_positive(ui, &mut r);
+                    if changed {
+                        self.portal.c1 = trs_to_mat(pos, rot, r);
+                    }
                 });
                 ui.horizontal(|ui| {
                     ui.label("Portal 2:");
-                    egui_f64(ui, &mut self.portal.c2.pos.x);
-                    egui_f64(ui, &mut self.portal.c2.pos.y);
+                    let (mut pos, mut rot, mut r) = mat_to_trs(&self.portal.c2);
+                    let mut changed = false;
+                    changed |= egui_f64(ui, &mut pos.x);
+                    changed |= egui_f64(ui, &mut pos.y);
                     ui.separator();
-                    egui_angle_f64(ui, &mut self.portal.c2.rot);
+                    changed |= egui_angle_f64(ui, &mut rot);
                     ui.separator();
-                    egui_f64_positive(ui, &mut self.portal.c2.r);
+                    changed |= egui_f64_positive(ui, &mut r);
+                    if changed {
+                        self.portal.c2 = trs_to_mat(pos, rot, r);
+                    }
                 });
                 ui.horizontal(|ui| {
                     ui.label("Portal type:");
