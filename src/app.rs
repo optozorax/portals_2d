@@ -473,6 +473,44 @@ impl Camera {
     fn get_matrix(&self) -> DMat3 {
         DMat3::from_scale_angle_translation(DVec2::new(self.scale, self.scale), 0., self.pos)
     }
+
+    fn get_matrices(&self, ui: &mut Ui) -> (DMat3, DMat3, DMat3) {
+        let available_size = ui.max_rect().size();
+        let window_scale = available_size.x.min(available_size.y);
+        let mat_orig = self.get_matrix();
+        let screen_mat =
+            DMat3::from_translation(
+                DVec2::new(available_size.x as f64, available_size.y as f64) / 2.,
+            ) * DMat3::from_scale(DVec2::new(window_scale as f64, window_scale as f64));
+        let mat = screen_mat * mat_orig;
+
+        (mat, screen_mat, mat_orig)
+    }
+
+    fn update(&mut self, ui: &mut Ui, mat: DMat3, screen_mat: DMat3, mat_orig: DMat3) {
+        let mut response = ui.allocate_rect(egui::Rect::EVERYTHING, egui::Sense::drag());
+        if response.dragged() {
+            ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Move);
+            let delta = response.drag_delta();
+            let delta = (screen_mat.inverse()
+                * DVec3::new(delta.x as f64, delta.y as f64, 0.))
+            .xy();
+            self.pos += delta;
+            response.mark_changed();
+        }
+        let scale = ui.ctx().input(|r| 1.003_f64.powf(r.smooth_scroll_delta.y as f64) * r.zoom_delta() as f64);
+        if response.hovered() && scale != 1. {
+            if let Some(pos) = response.hover_pos() {
+                let pos = (mat.inverse() * DVec3::new(pos.x as f64, pos.y as f64, 1.)).xy();
+                let mat1 = mat_orig
+                    * DMat3::from_translation(pos)
+                    * DMat3::from_scale(DVec2::new(scale, scale))
+                    * DMat3::from_translation(-pos);
+                self.pos = (mat1 * DVec3::new(0., 0., 1.)).xy();
+                self.scale = (mat1 * DVec3::new(1., 0., 0.)).x;
+            }
+        }
+    }
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Default)]
@@ -792,14 +830,9 @@ impl eframe::App for Portals2D {
                     Vec2::new(ui.available_width(), ui.available_height()),
                     Sense::hover(),
                 );
-                let available_size = ui.max_rect().size();
-                let window_scale = available_size.x.min(available_size.y);
-                let mat_orig = self.camera.get_matrix();
-                let screen_mat =
-                    DMat3::from_translation(
-                        DVec2::new(available_size.x as f64, available_size.y as f64) / 2.,
-                    ) * DMat3::from_scale(DVec2::new(window_scale as f64, window_scale as f64));
-                let mat = screen_mat * self.camera.get_matrix();
+
+                let (mat, screen_mat, mat_orig) = self.camera.get_matrices(ui);
+
                 let painter = PainterWrapper::new(&painter, mat);
 
                 let stroke = Stroke::new(
@@ -852,28 +885,7 @@ impl eframe::App for Portals2D {
 
                 point_ui_mat(ui, mat, &mut self.cone.position, 1., 1.);
 
-                let mut response = ui.allocate_rect(egui::Rect::EVERYTHING, egui::Sense::drag());
-                if response.dragged() {
-                    ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Move);
-                    let delta = response.drag_delta();
-                    let delta = (screen_mat.inverse()
-                        * DVec3::new(delta.x as f64, delta.y as f64, 0.))
-                    .xy();
-                    self.camera.pos += delta;
-                    response.mark_changed();
-                }
-                let scale = ui.ctx().input(|r| 1.003_f64.powf(r.smooth_scroll_delta.y as f64) * r.zoom_delta() as f64);
-                if response.hovered() && scale != 1. {
-                    if let Some(pos) = response.hover_pos() {
-                        let pos = (mat.inverse() * DVec3::new(pos.x as f64, pos.y as f64, 1.)).xy();
-                        let mat1 = mat_orig
-                            * DMat3::from_translation(pos)
-                            * DMat3::from_scale(DVec2::new(scale, scale))
-                            * DMat3::from_translation(-pos);
-                        self.camera.pos = (mat1 * DVec3::new(0., 0., 1.)).xy();
-                        self.camera.scale = (mat1 * DVec3::new(1., 0., 0.)).x;
-                    }
-                }
+                self.camera.update(ui, mat, screen_mat, mat_orig);
             });
 
         egui::Window::new("Parameters")
