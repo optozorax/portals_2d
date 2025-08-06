@@ -69,6 +69,13 @@ impl Default for Ray {
 }
 
 impl Ray {
+    fn new(o: DVec2, d: DVec2) -> Ray {
+        Ray {
+            o,
+            d,
+        }
+    }
+
     fn offset(&self, t: f64) -> DVec2 {
         self.o + self.d * t
     }
@@ -78,6 +85,52 @@ impl Ray {
             o: self.o,
             d: self.d.normalize(),
         }
+    }
+
+    fn transform(&self, matrix: &DMat3) -> Ray {
+        Ray {
+            o: matrix.transform_point2(self.o),
+            d: matrix.transform_vector2(self.d),
+        }
+    }
+}
+
+fn intersect_ellipse(ray: &Ray, scale_y: f64) -> Option<f64> {
+    if scale_y <= 0.0 {
+        return None;
+    }
+
+    let o = DVec2::new(ray.o.x, ray.o.y / scale_y);
+    let d = DVec2::new(ray.d.x, ray.d.y / scale_y);
+
+    let a = d.dot(d);
+    if a <= 1e-24 {
+        return None;
+    }
+    let b = 2.0 * o.dot(d);
+    let c = o.dot(o) - 1.0;
+
+    let disc = b * b - 4.0 * a * c;
+    if disc < 0.0 {
+        return None;
+    }
+    let sqrt_disc = disc.sqrt();
+
+    let q = -0.5 * (b + b.signum() * sqrt_disc);
+
+    let mut t0 = q / a;
+    let mut t1 = c / q;
+    if t0 > t1 {
+        std::mem::swap(&mut t0, &mut t1);
+    }
+
+    const EPS: f64 = 1e-12;
+    if t0 >= EPS {
+        Some(t0)
+    } else if t1 >= EPS {
+        Some(t1)
+    } else {
+        None
     }
 }
 
@@ -136,16 +189,8 @@ fn circle_invert_ray_direction(ray: &Ray) -> DVec2 {
 fn intersect_circle_portal(ray: &Ray, portal: &Portal) -> (Option<f64>, bool, Option<Ray>) {
     let inv1 = portal.c1.inverse();
     let inv2 = portal.c2.inverse();
-    let ray1 = Ray {
-        o: inv1.transform_point2(ray.o),
-        d: inv1.transform_vector2(ray.d),
-    };
-    let ray2 = Ray {
-        o: inv2.transform_point2(ray.o),
-        d: inv2.transform_vector2(ray.d),
-    };
-    let t1 = ray_circle_intersection(&ray1);
-    let t2 = ray_circle_intersection(&ray2);
+    let t1 = ray_circle_intersection(&ray.transform(&inv1));
+    let t2 = ray_circle_intersection(&ray.transform(&inv2));
 
     if let Some(t1_val) = t1 {
         if t2.is_none() || t1_val < t2.unwrap() {
@@ -154,10 +199,7 @@ fn intersect_circle_portal(ray: &Ray, portal: &Portal) -> (Option<f64>, bool, Op
 
             match portal.portal_type {
                 PortalType::Wormhole => {
-                    let local_ray = Ray {
-                        o: inv2.transform_point2(new_pos),
-                        d: inv2.transform_vector2(new_dir),
-                    };
+                    let local_ray = Ray::new(new_pos, new_dir).transform(&inv2);
                     let inverted = circle_invert_ray_direction(&local_ray);
                     new_dir = portal.c2.transform_vector2(inverted);
                 }
@@ -185,10 +227,7 @@ fn intersect_circle_portal(ray: &Ray, portal: &Portal) -> (Option<f64>, bool, Op
 
             match portal.portal_type {
                 PortalType::Wormhole => {
-                    let local_ray = Ray {
-                        o: inv1.transform_point2(new_pos),
-                        d: inv1.transform_vector2(new_dir),
-                    };
+                    let local_ray = Ray::new(new_pos, new_dir).transform(&inv1);
                     let inverted = circle_invert_ray_direction(&local_ray);
                     new_dir = portal.c1.transform_vector2(inverted);
                 }
