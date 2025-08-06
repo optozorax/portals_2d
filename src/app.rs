@@ -34,6 +34,8 @@ pub enum PortalType {
     Regular,
     Perspective,
     Wormhole,
+    Flat,
+    Semicircle,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone)]
@@ -156,6 +158,68 @@ fn ray_circle_intersection(ray: &Ray) -> Option<f64> {
     }
 }
 
+fn cross(a: DVec2, b: DVec2) -> f64 {
+    a.x * b.y - a.y * b.x
+}
+
+fn ray_segment_intersection(ray: &Ray, a: DVec2, b: DVec2) -> Option<f64> {
+    let r = ray.d;
+    let s = b - a;
+    let denom = cross(r, s);
+    if denom.abs() <= 1e-12 {
+        return None;
+    }
+    let t = cross(a - ray.o, s) / denom;
+    let u = cross(a - ray.o, r) / denom;
+    if t >= 1e-12 && (0.0..=1.0).contains(&u) {
+        Some(t)
+    } else {
+        None
+    }
+}
+
+fn ray_semicircle_intersection(ray: &Ray) -> Option<f64> {
+    let p0 = DVec2::new(-1.0, 0.0);
+    let p1 = DVec2::new(0.0, 1.0);
+    let center = (p0 + p1) * 0.5;
+    let radius = (p1 - p0).length() * 0.5;
+    let normal = DVec2::new(-(p1 - p0).y, (p1 - p0).x);
+
+    let o = ray.o - center;
+    let d = ray.d;
+    let a = d.dot(d);
+    let b = 2.0 * o.dot(d);
+    let c = o.dot(o) - radius * radius;
+    let disc = b * b - 4.0 * a * c;
+    if disc < 0.0 {
+        return None;
+    }
+    let sqrt_disc = disc.sqrt();
+    let q = -0.5 * (b + b.signum() * sqrt_disc);
+    let mut t0 = q / a;
+    let mut t1 = c / q;
+    if t0 > t1 {
+        std::mem::swap(&mut t0, &mut t1);
+    }
+    let check = |t: f64| -> Option<f64> {
+        const EPS: f64 = 1e-12;
+        if t >= EPS {
+            let p = ray.offset(t);
+            if (p - center).dot(normal) <= EPS {
+                Some(t)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+    if let Some(t) = check(t0) {
+        return Some(t);
+    }
+    check(t1)
+}
+
 fn teleport_position(pos: DVec2, from: &DMat3, to: &DMat3) -> DVec2 {
     let local = from.inverse().transform_point2(pos);
     to.transform_point2(local)
@@ -206,7 +270,7 @@ fn intersect_circle_portal(ray: &Ray, portal: &Portal) -> (Option<f64>, bool, Op
                 PortalType::Perspective => {
                     new_dir = -new_dir;
                 }
-                PortalType::Regular => {}
+                _ => {}
             }
 
             return (
@@ -234,7 +298,7 @@ fn intersect_circle_portal(ray: &Ray, portal: &Portal) -> (Option<f64>, bool, Op
                 PortalType::Perspective => {
                     new_dir = -new_dir;
                 }
-                PortalType::Regular => {}
+                _ => {}
             }
 
             return (
@@ -251,6 +315,94 @@ fn intersect_circle_portal(ray: &Ray, portal: &Portal) -> (Option<f64>, bool, Op
     (None, false, None)
 }
 
+fn intersect_flat_portal(ray: &Ray, portal: &Portal) -> (Option<f64>, bool, Option<Ray>) {
+    let inv1 = portal.c1.inverse();
+    let inv2 = portal.c2.inverse();
+    let a = DVec2::new(-1.0, 0.0);
+    let b = DVec2::new(0.0, 1.0);
+    let t1 = ray_segment_intersection(&ray.transform(&inv1), a, b);
+    let t2 = ray_segment_intersection(&ray.transform(&inv2), a, b);
+
+    if let Some(t1_val) = t1 {
+        if t2.is_none() || t1_val < t2.unwrap() {
+            let new_pos = teleport_position(ray.offset(t1_val), &portal.c1, &portal.c2);
+            let new_dir = teleport_direction(ray.d, &portal.c1, &portal.c2);
+            return (
+                Some(t1_val),
+                true,
+                Some(Ray {
+                    o: new_pos,
+                    d: new_dir,
+                }),
+            );
+        }
+    }
+
+    if let Some(t2_val) = t2 {
+        if t1.is_none() || t2_val < t1.unwrap() {
+            let new_pos = teleport_position(ray.offset(t2_val), &portal.c2, &portal.c1);
+            let new_dir = teleport_direction(ray.d, &portal.c2, &portal.c1);
+            return (
+                Some(t2_val),
+                true,
+                Some(Ray {
+                    o: new_pos,
+                    d: new_dir,
+                }),
+            );
+        }
+    }
+
+    (None, false, None)
+}
+
+fn intersect_semicircle_portal(ray: &Ray, portal: &Portal) -> (Option<f64>, bool, Option<Ray>) {
+    let inv1 = portal.c1.inverse();
+    let inv2 = portal.c2.inverse();
+    let t1 = ray_semicircle_intersection(&ray.transform(&inv1));
+    let t2 = ray_semicircle_intersection(&ray.transform(&inv2));
+
+    if let Some(t1_val) = t1 {
+        if t2.is_none() || t1_val < t2.unwrap() {
+            let new_pos = teleport_position(ray.offset(t1_val), &portal.c1, &portal.c2);
+            let new_dir = teleport_direction(ray.d, &portal.c1, &portal.c2);
+            return (
+                Some(t1_val),
+                true,
+                Some(Ray {
+                    o: new_pos,
+                    d: new_dir,
+                }),
+            );
+        }
+    }
+
+    if let Some(t2_val) = t2 {
+        if t1.is_none() || t2_val < t1.unwrap() {
+            let new_pos = teleport_position(ray.offset(t2_val), &portal.c2, &portal.c1);
+            let new_dir = teleport_direction(ray.d, &portal.c2, &portal.c1);
+            return (
+                Some(t2_val),
+                true,
+                Some(Ray {
+                    o: new_pos,
+                    d: new_dir,
+                }),
+            );
+        }
+    }
+
+    (None, false, None)
+}
+
+fn intersect_portal(ray: &Ray, portal: &Portal) -> (Option<f64>, bool, Option<Ray>) {
+    match portal.portal_type {
+        PortalType::Flat => intersect_flat_portal(ray, portal),
+        PortalType::Semicircle => intersect_semicircle_portal(ray, portal),
+        _ => intersect_circle_portal(ray, portal),
+    }
+}
+
 fn travel_ray(
     ray: &Ray,
     portal: &Portal,
@@ -262,7 +414,7 @@ fn travel_ray(
     let mut lengths = Vec::new();
 
     for _ in 0..settings.max_teleportations {
-        let (t, is_continue, new_ray) = intersect_circle_portal(&ray, portal);
+        let (t, is_continue, new_ray) = intersect_portal(&ray, portal);
 
         if let Some(t_val) = t {
             ray.o = ray.offset(t_val);
@@ -711,6 +863,45 @@ impl PainterWrapper<'_> {
     }
 }
 
+fn draw_portal_shape(
+    painter: &PainterWrapper<'_>,
+    mat: &DMat3,
+    portal_type: PortalType,
+    thickness: f64,
+    color: Color32,
+) {
+    let stroke = Stroke::new(thickness as f32, color);
+    match portal_type {
+        PortalType::Flat => {
+            let a = mat.transform_point2(DVec2::new(-1.0, 0.0));
+            let b = mat.transform_point2(DVec2::new(0.0, 1.0));
+            painter.line_segment(a, b, stroke);
+        }
+        PortalType::Semicircle => {
+            let p0 = DVec2::new(-1.0, 0.0);
+            let p1 = DVec2::new(0.0, 1.0);
+            let center = (p0 + p1) * 0.5;
+            let radius = (p1 - p0).length() * 0.5;
+            let start_angle = 5.0 * PI / 4.0;
+            let segments = 32;
+            let mut prev = mat.transform_point2(
+                center + DVec2::new(radius * start_angle.cos(), radius * start_angle.sin()),
+            );
+            for i in 1..=segments {
+                let angle = start_angle + PI * i as f64 / segments as f64;
+                let pt_local = center + DVec2::new(radius * angle.cos(), radius * angle.sin());
+                let pt = mat.transform_point2(pt_local);
+                painter.line_segment(prev, pt, stroke);
+                prev = pt;
+            }
+        }
+        _ => {
+            let (pos, _, r) = mat_to_trs(mat);
+            painter.circle_stroke(pos, r - thickness / 2.0, stroke);
+        }
+    }
+}
+
 fn draw_segments(
     painter: &PainterWrapper<'_>,
     segments: &[(DVec2, DVec2, f64)],
@@ -841,26 +1032,24 @@ impl eframe::App for Portals2D {
                 let segments = travel_ray(&self.ray, &self.portal, &self.rendering_settings);
                 draw_segments(&painter, &segments, &self.drawing_settings);
 
-                let (mut pos1, _, r1) = mat_to_trs(&self.portal.c1);
-                painter.circle_stroke(
-                    pos1,
-                    r1 - self.drawing_settings.portal_thickness / 2.,
-                    Stroke::new(
-                        self.drawing_settings.portal_thickness as f32,
-                        Color32::ORANGE,
-                    ),
+                let (mut pos1, _, _) = mat_to_trs(&self.portal.c1);
+                draw_portal_shape(
+                    &painter,
+                    &self.portal.c1,
+                    self.portal.portal_type,
+                    self.drawing_settings.portal_thickness,
+                    Color32::ORANGE,
                 );
                 point_ui_mat(ui, mat, &mut pos1, 1., 1.);
                 set_pos(&mut self.portal.c1, pos1);
 
-                let (mut pos2, _, r2) = mat_to_trs(&self.portal.c2);
-                painter.circle_stroke(
-                    pos2,
-                    r2 - self.drawing_settings.portal_thickness / 2.,
-                    Stroke::new(
-                        self.drawing_settings.portal_thickness as f32,
-                        Color32::LIGHT_BLUE,
-                    ),
+                let (mut pos2, _, _) = mat_to_trs(&self.portal.c2);
+                draw_portal_shape(
+                    &painter,
+                    &self.portal.c2,
+                    self.portal.portal_type,
+                    self.drawing_settings.portal_thickness,
+                    Color32::LIGHT_BLUE,
                 );
                 point_ui_mat(ui, mat, &mut pos2, 1., 1.);
                 set_pos(&mut self.portal.c2, pos2);
@@ -929,6 +1118,16 @@ impl eframe::App for Portals2D {
                         &mut self.portal.portal_type,
                         PortalType::Perspective,
                         "Perspective",
+                    );
+                    ui.selectable_value(
+                        &mut self.portal.portal_type,
+                        PortalType::Flat,
+                        "Flat",
+                    );
+                    ui.selectable_value(
+                        &mut self.portal.portal_type,
+                        PortalType::Semicircle,
+                        "Semicircle",
                     );
                 });
                 ui.horizontal(|ui| {
