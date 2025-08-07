@@ -22,6 +22,7 @@ eframe = { version = "0.31", default-features = false, features = [
 ] }
 log = "0.4.27"
 glam = { version = "0.30.4", default-features = false, features = ["serde", "std"] }
+ordered-float = "5.0.0"
 
 # You only need serde if you want app persistence:
 serde = { version = "1.0.219", features = ["derive"] }
