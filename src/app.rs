@@ -28,14 +28,19 @@ fn set_pos(mat: &mut DMat3, pos: DVec2) {
     *mat = trs_to_mat(pos, rot, scale);
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Default, Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq)]
 pub enum PortalType {
-    #[default]
-    Regular,
-    Perspective,
-    Wormhole,
+    Regular { scale_y: f64 },
+    Perspective { scale_y: f64 },
+    Wormhole { scale_y: f64 },
     Flat,
-    Semicircle,
+    Semicircle { scale_y: f64 },
+}
+
+impl Default for PortalType {
+    fn default() -> Self {
+        PortalType::Regular { scale_y: 1.0 }
+    }
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone)]
@@ -72,10 +77,7 @@ impl Default for Ray {
 
 impl Ray {
     fn new(o: DVec2, d: DVec2) -> Ray {
-        Ray {
-            o,
-            d,
-        }
+        Ray { o, d }
     }
 
     fn offset(&self, t: f64) -> DVec2 {
@@ -206,6 +208,20 @@ fn ray_semicircle_intersection(ray: &Ray) -> Option<f64> {
     res
 }
 
+fn intersect_semicircle(ray: &Ray, scale_y: f64) -> Option<f64> {
+    if scale_y == 1.0 {
+        return ray_semicircle_intersection(ray);
+    }
+    if scale_y <= 0.0 {
+        return None;
+    }
+    let scaled_ray = Ray {
+        o: DVec2::new(ray.o.x, ray.o.y / scale_y),
+        d: DVec2::new(ray.d.x, ray.d.y / scale_y),
+    };
+    ray_semicircle_intersection(&scaled_ray)
+}
+
 fn teleport_position(pos: DVec2, from: &DMat3, to: &DMat3) -> DVec2 {
     let local = from.inverse().transform_point2(pos);
     to.transform_point2(local)
@@ -236,18 +252,57 @@ fn circle_invert_ray_direction(ray: &Ray) -> DVec2 {
     }
 }
 
+fn ellipse_invert_ray_direction(ray: &Ray, scale_y: f64) -> DVec2 {
+    if scale_y <= 0.0 {
+        return ray.d;
+    }
+
+    let p = ray.o;
+    let nx = p.x;
+    let ny = p.y / (scale_y * scale_y);
+
+    let mut n = DVec2::new(nx, ny);
+    let n_len = n.length();
+    if n_len == 0.0 {
+        return ray.d;
+    }
+    n /= n_len;
+
+    let dot = ray.d.dot(n);
+    ray.d - n * (2.0 * dot)
+}
+
 fn intersect_portal(ray: &Ray, portal: &Portal) -> (Option<f64>, bool, Option<Ray>) {
     let inv1 = portal.c1.inverse();
     let inv2 = portal.c2.inverse();
 
-    let intersection: fn(&Ray) -> Option<f64> = match portal.portal_type {
-        PortalType::Flat => ray_segment_intersection,
-        PortalType::Semicircle => ray_semicircle_intersection,
-        _ => ray_circle_intersection,
-    };
+    let local1 = ray.transform(&inv1);
+    let local2 = ray.transform(&inv2);
 
-    let t1 = intersection(&ray.transform(&inv1));
-    let t2 = intersection(&ray.transform(&inv2));
+    let (t1, t2) = match portal.portal_type {
+        PortalType::Flat => (
+            ray_segment_intersection(&local1),
+            ray_segment_intersection(&local2),
+        ),
+        PortalType::Semicircle { scale_y } => (
+            intersect_semicircle(&local1, scale_y),
+            intersect_semicircle(&local2, scale_y),
+        ),
+        PortalType::Regular { scale_y }
+        | PortalType::Perspective { scale_y }
+        | PortalType::Wormhole { scale_y } => (
+            if scale_y == 1.0 {
+                ray_circle_intersection(&local1)
+            } else {
+                intersect_ellipse(&local1, scale_y)
+            },
+            if scale_y == 1.0 {
+                ray_circle_intersection(&local2)
+            } else {
+                intersect_ellipse(&local2, scale_y)
+            },
+        ),
+    };
 
     let (t_hit, from, to, inv_to) = match (t1, t2) {
         (Some(t1), Some(t2)) => {
@@ -266,15 +321,19 @@ fn intersect_portal(ray: &Ray, portal: &Portal) -> (Option<f64>, bool, Option<Ra
     let mut new_dir = teleport_direction(ray.d, from, to);
 
     match portal.portal_type {
-        PortalType::Wormhole => {
+        PortalType::Wormhole { scale_y } => {
             let local_ray = Ray::new(new_pos, new_dir).transform(inv_to);
-            let inverted = circle_invert_ray_direction(&local_ray);
+            let inverted = if scale_y == 1.0 {
+                circle_invert_ray_direction(&local_ray)
+            } else {
+                ellipse_invert_ray_direction(&local_ray, scale_y)
+            };
             new_dir = to.transform_vector2(inverted);
         }
-        PortalType::Perspective => {
+        PortalType::Perspective { .. } => {
             new_dir = -new_dir;
         }
-        _ => {}
+        PortalType::Regular { .. } | PortalType::Semicircle { .. } | PortalType::Flat => {}
     }
 
     (
@@ -761,20 +820,34 @@ fn draw_portal_shape(
             let b = mat.transform_point2(DVec2::new(1.0, 0.0));
             painter.line_segment(a, b, stroke);
         }
-        PortalType::Semicircle => {
+        PortalType::Semicircle { scale_y } => {
             let segments = 32;
             let mut prev = mat.transform_point2(DVec2::new(-1.0, 0.0));
             for i in 1..=segments {
                 let angle = PI - PI * i as f64 / segments as f64;
-                let pt_local = DVec2::new(angle.cos(), angle.sin());
+                let pt_local = DVec2::new(angle.cos(), angle.sin() * scale_y);
                 let pt = mat.transform_point2(pt_local);
                 painter.line_segment(prev, pt, stroke);
                 prev = pt;
             }
         }
-        _ => {
-            let (pos, _, r) = mat_to_trs(mat);
-            painter.circle_stroke(pos, r - thickness / 2.0, stroke);
+        PortalType::Regular { scale_y }
+        | PortalType::Perspective { scale_y }
+        | PortalType::Wormhole { scale_y } => {
+            if scale_y == 1.0 {
+                let (pos, _, r) = mat_to_trs(mat);
+                painter.circle_stroke(pos, r - thickness / 2.0, stroke);
+            } else {
+                let segments = 64;
+                let mut prev = mat.transform_point2(DVec2::new(1.0, 0.0));
+                for i in 1..=segments {
+                    let angle = 2.0 * PI * i as f64 / segments as f64;
+                    let pt_local = DVec2::new(angle.cos(), angle.sin() * scale_y);
+                    let pt = mat.transform_point2(pt_local);
+                    painter.line_segment(prev, pt, stroke);
+                    prev = pt;
+                }
+            }
         }
     }
 }
@@ -979,34 +1052,47 @@ impl eframe::App for Portals2D {
                         self.portal.c2 = trs_to_mat(pos, rot, r);
                     }
                 });
+                let scale_y = match self.portal.portal_type {
+                    PortalType::Regular { scale_y }
+                    | PortalType::Perspective { scale_y }
+                    | PortalType::Wormhole { scale_y }
+                    | PortalType::Semicircle { scale_y } => scale_y,
+                    _ => 1.0,
+                };
                 ui.horizontal(|ui| {
                     ui.label("Portal type:");
                     ui.selectable_value(
                         &mut self.portal.portal_type,
-                        PortalType::Regular,
+                        PortalType::Regular { scale_y },
                         "Regular",
                     );
                     ui.selectable_value(
                         &mut self.portal.portal_type,
-                        PortalType::Wormhole,
+                        PortalType::Wormhole { scale_y },
                         "Wormhole",
                     );
                     ui.selectable_value(
                         &mut self.portal.portal_type,
-                        PortalType::Perspective,
+                        PortalType::Perspective { scale_y },
                         "Perspective",
                     );
+                    ui.selectable_value(&mut self.portal.portal_type, PortalType::Flat, "Flat");
                     ui.selectable_value(
                         &mut self.portal.portal_type,
-                        PortalType::Flat,
-                        "Flat",
-                    );
-                    ui.selectable_value(
-                        &mut self.portal.portal_type,
-                        PortalType::Semicircle,
+                        PortalType::Semicircle { scale_y },
                         "Semicircle",
                     );
                 });
+                if let PortalType::Regular { scale_y }
+                | PortalType::Wormhole { scale_y }
+                | PortalType::Perspective { scale_y }
+                | PortalType::Semicircle { scale_y } = &mut self.portal.portal_type
+                {
+                    ui.horizontal(|ui| {
+                        ui.label("Scale Y:");
+                        egui_f64_positive(ui, scale_y);
+                    });
+                }
                 ui.horizontal(|ui| {
                     ui.label("Ray:");
                     egui_f64(ui, &mut self.ray.o.x);
